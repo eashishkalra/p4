@@ -1,0 +1,1306 @@
+%% ATOM-IDS -- IETE Journal of Research submission manuscript
+%% Layout follows the official IETE Journal of Research template supplied in
+%% REf/IETE-Journal-of-Research-Template.pdf.
+%% Compile: pdflatex ATOM-IDS-IETE -> bibtex ATOM-IDS-IETE -> pdflatex x2
+
+\documentclass[10pt,letterpaper,twocolumn]{article}
+
+\usepackage{cmap}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{newtxtext}
+\usepackage[top=0.68in,bottom=0.70in,left=0.67in,right=0.67in,
+            columnsep=0.24in,headheight=13pt]{geometry}
+\usepackage{amsmath}
+\usepackage{newtxmath}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{multirow}
+\usepackage{makecell}
+\usepackage{siunitx}
+\usepackage[ruled,vlined]{algorithm2e}
+\usepackage{url}
+\usepackage[hidelinks]{hyperref}
+\usepackage{xurl}
+\usepackage{cite}
+\usepackage{titlesec}
+\usepackage{fancyhdr}
+\usepackage{caption}
+\usepackage{dblfloatfix}
+
+\setlength{\emergencystretch}{2em}
+\setlength{\parindent}{1em}
+\setlength{\parskip}{0pt}
+\setlength{\textfloatsep}{7pt plus 2pt minus 2pt}
+\setlength{\floatsep}{6pt plus 2pt minus 2pt}
+\setlength{\intextsep}{6pt plus 2pt minus 2pt}
+\captionsetup{font=small,labelsep=period,justification=justified,
+              singlelinecheck=false}
+\titleformat{\section}{\bfseries\normalsize}{\thesection.}{0.45em}{\MakeUppercase}
+\titleformat{\subsection}{\bfseries\normalsize}{\thesubsection}{0.45em}{}
+\titleformat{\subsubsection}{\itshape\normalsize}{\thesubsubsection}{0.45em}{}
+\titlespacing*{\section}{0pt}{8pt plus 2pt minus 1pt}{3pt}
+\titlespacing*{\subsection}{0pt}{6pt plus 2pt minus 1pt}{2pt}
+\titlespacing*{\subsubsection}{0pt}{5pt plus 1pt minus 1pt}{2pt}
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\scriptsize ATOM-IDS}
+\fancyhead[R]{\scriptsize\thepage}
+\renewcommand{\headrulewidth}{0pt}
+\renewcommand{\footrulewidth}{0pt}
+\makeatletter
+\renewcommand\@biblabel[1]{#1.}
+\makeatother
+
+\begin{document}
+
+\twocolumn[{%
+\begin{@twocolumnfalse}
+\begin{center}
+{\LARGE\bfseries ATOM-IDS: An Accumulator-Based Tiny On-Device Model for
+Intrusion Detection in Microcontroller-Class IoT Devices\par}
+\vspace{7pt}
+{\large Ashish Kalra and Manoj Kumar\par}
+\vspace{5pt}
+{\small Department of Computer Science \& Engineering, Delhi Technological
+University, Main Bawana Road, Delhi 110042, India\par}
+{\small Corresponding author: Ashish Kalra
+(\texttt{ashishkalra\_2k22phdco502@dtu.ac.in})\par}
+\end{center}
+\vspace{5pt}
+\noindent\textbf{ABSTRACT}\par
+\small
+IoT intrusion detection requires high predictive accuracy while operating
+within the storage, latency and energy limits of embedded devices. We present
+ATOM-IDS, an Accumulator-based Tiny On-device Model for IDS, with a novel
+fixed-shape grouped accumulator that replaces per-feature tokenisation. Each
+feature is encoded by a binned embedding and a rank-1 component, assigned to
+one of \(K\) fixed random groups, rescaled by a power-of-two factor and refined
+by a shared residual MLP. The method is evaluated on Edge-IIoTset and
+CIC-IIoT-2025 using a leakage-controlled, class-stratified chronological
+protocol, and on CICIDS2017
+as an external enterprise-traffic robustness benchmark. The model is deployed
+on an ESP32-S3 edge device. With $d = 8$, $K = 8$, INT8 weights and FP32
+arithmetic, ATOM-IDS achieves macro-F1 scores of 0.8007, 0.5638 and 0.6163 on
+Edge-IIoTset, CIC-IIoT-2025 and CICIDS2017, respectively, with corresponding
+ESP32-S3 inference latencies of \SI{243.5}{\micro\second},
+\SI{250.6}{\micro\second} and \SI{277.4}{\micro\second}. The Edge-IIoTset build
+consumes a measured differential energy of \SI{9.56}{\micro\joule} per
+inference. It is $2.4\times$ faster and 7.4 percentage points higher in macro-F1
+than the identically deployed MLP ($h = 64$) baseline on Edge-IIoTset.
+Under the same protocol, the tested FT-Transformer requires substantially more
+arithmetic and activation memory and does not fit the target deployment
+budget. These results show that streaming grouped accumulation can provide
+competitive intrusion detection within microcontroller resource limits.\par
+\vspace{5pt}
+\noindent\textbf{Keywords:} Edge computing, intrusion detection, IoT security,
+on-device inference, quantisation, tabular deep learning, TinyML.
+\vspace{10pt}
+\end{@twocolumnfalse}
+}]
+
+\section{Introduction}
+\label{sec:intro}
+
+The rapid expansion of Internet of Things (IoT) deployments has enlarged the
+network attack surface while many endpoints remain limited in memory,
+computation and energy \cite{ferrag2020dl}. An intrusion detector running on
+the endpoint can respond without transmitting every flow to a gateway,
+reducing communication delay, retaining raw traffic locally and remaining
+available during network disruption. In this study, kilobyte-scale model
+storage and sub-millisecond inference are adopted as target constraints for a
+single-core microcontroller.
+
+Recent deep-learning IDS studies commonly use recurrent, attention-based or
+hybrid models, often combined with metaheuristic feature selection and
+hyperparameter optimisation. Most are evaluated on desktop or simulated platforms and do not
+report flash consumption, working memory, measured latency or energy on
+microcontrollers. TinyML studies demonstrate that intrusion detection can
+operate on constrained hardware \cite{hamdouchi2025tinyml}, while hardware-aware
+neural architecture search confirms the feasibility of device-constrained
+models \cite{ortizgarces2026nas}. However, these approaches reuse
+established computational structures instead of reconsidering how tabular
+features are represented and aggregated.
+
+A representative purpose-built lightweight alternative reduces transformer
+cost through low-rank projection, separable convolution and quantisation
+\cite{wang2024theseus}, while retaining per-feature tokenisation. For $N$ input
+fields, tokenisation materialises an $N \times d$ intermediate and
+self-attention operates on a sequence of length $L=N+1$ at $O(L^{2})$ cost
+\cite{vaswani2017attention}. For tabular flows, feature
+order is defined primarily by the data schema rather than a meaningful temporal
+sequence. Consequently, token and attention costs may grow without a
+deployment benefit. Moreover, analytic multiply--accumulate
+counts alone cannot establish deployability because operator choice affects
+wall-clock latency.
+
+Evaluation rigor matters. Socket identifiers can act as label shortcuts,
+and random splits can place related campaign records in both training and test
+partitions, producing optimistic estimates \cite{arp2022dos}. A credible
+on-device evaluation should therefore control identifier leakage, preserve
+chronological order within each class and measure the exported model on the
+target hardware.
+
+To address these limitations, we propose ATOM-IDS, an Accumulator-based Tiny
+On-device Model for IDS. Each feature is represented by a binned-embedding
+lookup \cite{gorishniy2022embeddings} fused with a rank-1 component. The
+resulting encodings are assigned to $K$ fixed random groups, accumulated in
+streaming order, rescaled by a power-of-two factor and refined by a
+weight-shared residual multilayer perceptron. This construction avoids
+materialising an $N \times d$ token tensor; peak activation is instead a fixed
+$K \times d$ group state independent of the number of input features.
+
+ATOM-IDS is evaluated on Edge-IIoTset \cite{ferrag2022edgeiiotset},
+CIC-IIoT-2025 \cite{firouzi2025datasense} and CICIDS2017, with the latter used
+as an external enterprise-traffic robustness benchmark. Under the
+leakage-controlled temporal protocol, the deployed $d=8$, $K=8$ model achieves
+macro-F1 scores of 0.8007, 0.5638 and 0.6163 with ESP32-S3 latencies of
+\SI{243.5}{\micro\second}, \SI{250.6}{\micro\second} and
+\SI{277.4}{\micro\second}, respectively. On Edge-IIoTset, it consumes
+\SI{9.56}{\micro\joule} per inference and is $2.4\times$ faster and 7.4
+macro-F1 percentage points higher than the identically deployed MLP ($h=64$)
+baseline.
+
+The contributions of this study are:
+
+\begin{itemize}
+\item A fixed-shape grouped accumulator that combines binned and rank-1 feature
+encodings with power-of-two rescaling and shared residual refinement,
+eliminating per-feature token storage.
+
+\item A leakage-controlled evaluation across three datasets that removes
+socket identifiers, uses within-class chronological partitions and distinguishes
+external robustness from cross-dataset transfer.
+
+\item Controlled MLP, classical and transformer comparisons, together with
+encoder and aggregation ablations, that locate the sources of accuracy and
+compute differences.
+
+\item Physical ESP32-S3 deployment reporting macro-F1, minority-class recall,
+flash, working memory, measured latency, differential energy and device--host
+parity over 1000 flows per firmware build.
+\end{itemize}
+
+Section~\ref{sec:related} reviews related work, Section~\ref{sec:method}
+presents the methodology, Section~\ref{sec:results} discusses
+experimental results and Section~\ref{sec:conclusion} concludes the paper.
+
+\section{Literature review}
+\label{sec:related}
+
+Related work is organised around three questions: what recent IoT and wireless
+sensor network (WSN) detectors model, whether lightweight designs are verified
+on embedded hardware, and whether their evaluations support fair comparison.
+
+\subsection{Learning-based IDS for IoT networks}
+\label{sec:related:learning}
+
+Six recent \emph{IETE Journal of Research} papers illustrate the prevailing
+accuracy-oriented approach. Misbha et al. combine embedding, convolution and
+bidirectional recurrence for DDoS and man-in-the-middle detection on KDDCup99
+and UNSW-NB15 \cite{misbha2024security}. Grandhi et al. place a convolutional
+GRU within an authenticated SDN--IoT framework and evaluate it on IoT-23
+\cite{grandhi2025secure}. Yadav and Kumar join a stacked autoencoder, modified
+ANFIS and metaheuristic optimisation on CICIDS2017 and UNSW-NB15
+\cite{yadav2026anfis}. For WSNs, Ram and Saminathan combine preprocessing,
+feature selection and an optimised self-attention progressive GAN on WSN-DS
+\cite{ram2025sapgan}; Hemalatha et al. use filtering, feature selection and an
+interpretable additive neural model on AWID \cite{hemalatha2025igann}; and
+Divya and Kumar evaluate an optimised cross-stage partial recurrent network on
+four established datasets \cite{divya2026crossstage}. These systems broaden
+model choice and attack coverage, but use different datasets, splits and
+metrics. None of the six reports the complete combination of microcontroller
+flash, working memory, latency, energy and host--device output parity needed to
+establish on-device feasibility.
+
+Misbha et al. and Grandhi et al. emphasise learned spatial--temporal patterns;
+Yadav and Kumar combine representation learning with fuzzy inference; and the
+three WSN studies add optimisation around preprocessing, feature selection or
+classifier training. Consequently, their headline values cannot be averaged
+or ranked. They are used here to identify architectural trends and missing
+deployment evidence rather than to claim direct predictive superiority.
+
+\subsection{Lightweight and embedded IDS}
+\label{sec:related:lightweight}
+
+Model compression does not by itself demonstrate deployability. Wang et al.
+use knowledge distillation to compress a transformer-derived detector to as
+few as 788 parameters, but do not report microcontroller execution
+\cite{wang2024theseus}. FlowTransformer separates input encoding, transformer
+body and classification head; its experiments show that the head affects both
+predictive performance and model size \cite{manocchio2024flowtransformer}.
+Both studies motivate a transformer comparator, while leaving activation
+memory and device measurements open.
+
+TinyML studies supply stronger hardware evidence. Hamdouchi and Idri compare
+six classifiers on an Arduino Uno and jointly report kappa, latency, static RAM
+and flash \cite{hamdouchi2025tinyml}. Ortiz-Garc\'{e}s et al. apply
+hardware-aware neural architecture search to feature-aligned IoT corpora and
+report \SI{2.48}{\milli\second} latency, less than 20\,KB RAM and
+\SI{0.39}{\milli\joule} per inference on Cortex-M4/ESP32 targets
+\cite{ortizgarces2026nas}. Table~\ref{tab:related-compare} separates metric,
+storage or RAM, latency and energy; NR denotes unreported device evidence, not
+zero cost.
+
+These embedded studies expose two distinct notions of ``lightweight.'' A small
+parameter count controls persistent storage, whereas feasible execution also
+depends on peak activation memory, operator support and arithmetic cost.
+Hamdouchi and Idri provide unusually detailed resource measurements, but their
+best reported point uses a different dataset and model family from the neural
+comparators. Ortiz-Garc\'{e}s et al. demonstrate hardware-aware search and
+energy measurement, although their feature-alignment and evaluation protocol
+differ from those used here. ATOM-IDS therefore does not compare isolated
+headline scores across papers. It reports external studies as deployment
+context, then makes causal architecture comparisons only among models trained,
+quantised and timed under the same local protocol and device conditions.
+
+\subsection{Tabular representation learning and evaluation integrity}
+\label{sec.related.tabular}
+
+Network-flow records are tabular. FT-Transformer represents every feature as a
+token and applies self-attention \cite{gorishniy2021revisiting}; numerical
+feature embeddings can also improve non-transformer backbones
+\cite{gorishniy2022embeddings}. Nevertheless, tree ensembles remain strong
+baselines on medium-sized tabular datasets \cite{grinsztajn2022why}. ATOM-IDS
+therefore retains binned feature encoding but replaces the feature-length token
+sequence with fixed-shape grouped accumulation.
+
+Evaluation design limits cross-paper conclusions. IDS corpora lack a standard
+feature set, complicating comparison \cite{sarhan2022standard}; temporal and
+spatial bias can inflate security-classification results
+\cite{pendlebury2019tesseract}; and broader audits document recurring leakage,
+sampling and metric errors in security machine learning \cite{arp2022dos}.
+Accordingly, ATOM-IDS removes identifiers, fits preprocessing on training data,
+uses temporal splits and reports macro-F1. CICIDS2017 is treated as a separate
+enterprise-traffic robustness check, not evidence of unseen-dataset transfer.
+
+\begin{table*}[!t]
+\centering
+\caption{Comparison of reviewed IDS evidence. Values are self-reported and are
+not directly comparable across datasets or protocols. NR: not reported.}
+\label{tab:related-compare}
+\scriptsize\setlength{\tabcolsep}{2.2pt}
+\renewcommand{\arraystretch}{1.10}
+\begin{tabular}{@{}p{2.15cm}p{2.45cm}p{2.15cm}p{1.65cm}p{1.55cm}p{1.85cm}p{1.55cm}@{}}
+\toprule
+Study & Dataset(s) & Reported result & Hardware & Latency & Storage/RAM & Energy \\
+\midrule
+Misbha et al.\ \cite{misbha2024security} & KDDCup99, UNSW-NB15 & Classification metrics & NR & NR & NR & NR \\
+Grandhi et al.\ \cite{grandhi2025secure} & IoT-23 & Accuracy & NR & NR & NR & NR \\
+Yadav and Kumar \cite{yadav2026anfis} & CICIDS2017, UNSW-NB15 & Acc./P/R/F1 & NR & NR & NR & NR \\
+Ram and Saminathan \cite{ram2025sapgan} & WSN-DS & Relative accuracy gain & NR & NR & NR & NR \\
+Hemalatha et al.\ \cite{hemalatha2025igann} & AWID & DR/FAR improvement & NR & NR & NR & NR \\
+Divya and Kumar \cite{divya2026crossstage} & Four IDS datasets & 99.91\% accuracy & NR & NR & NR & NR \\
+Hamdouchi \& Idri \cite{hamdouchi2025tinyml} & NF-BoT-IoT-v2 & $\kappa=0.974$ & Arduino Uno & \SI{8}{\micro\second} & 4,730\,B SRAM & NR \\
+Ortiz-Garc\'{e}s et al.\ \cite{ortizgarces2026nas} & TON\_IoT, IoT-23, Edge-IIoTset & macro-F1 $>0.95$ (IoT-23) & Cortex-M4/ESP32 & \SI{2.48}{\milli\second} & $<$20\,KB RAM & \SI{0.39}{\milli\joule} \\
+\textbf{ATOM-IDS (this work)} & Edge-IIoTset & \textbf{macro-F1 $=0.8007$} & \textbf{ESP32-S3} & \textbf{\SI{243.5}{\micro\second}} & \textbf{6,603\,B read-only} & \textbf{\SI{9.56}{\micro\joule}} \\
+\bottomrule
+\end{tabular}
+\end{table*}
+
+The unresolved gap is an IDS representation whose working state does not grow
+with the feature count and whose predictive and physical costs are measured
+together. ATOM-IDS addresses that gap through grouped accumulation, matched
+baselines, leakage-controlled temporal evaluation and ESP32-S3 parity,
+latency, flash and energy measurements for this study.
+
+\iffalse
+
+This section examines and compares recent research addressing intrusion detection in IoT networks. The selected period provides a basis for examining emerging approaches, methodological improvements, and notable research directions in this domain. This section reviews existing research on intrusion detection in IoT networks, covering learning-based detectors, lightweight and transformer-based architectures, TinyML deployment on embedded hardware and tabular representation learning. The review highlights key performance outcomes and limitations while establishing a systematic framework for comparing the different approaches.
+
+\subsection{Learning-based IDS for IoT networks}
+\label{sec:related:learning}
+
+In 2025, Villafranca and Cano \cite{villafranca2025edgedl} proposed a
+lightweight, dataset-agnostic DNN architecture (256--128--64--Softmax) for IoT
+intrusion detection in sustainable smart-agriculture, curating a benchmark of
+18 IoT-IDS datasets and reporting 99.14\% average accuracy, including perfect
+scores on N-BaIoT, Car-Hacking and CIC-IoT2022, with only around 1.2 million
+parameters and no per-dataset tuning. In 2025, Okey et al.\
+\cite{okey2025ipasecoit} proposed iPASecIoT, a single-model framework that
+concurrently identifies IoT devices and detects intrusions from fine-grained
+behavioural fingerprints, combining machine and deep learning with a modified
+firefly algorithm under a kappa-score-based voting mechanism for adaptive
+feature selection, reporting mean F1 scores above 98\% for both device
+identification and threat classification across the CICIoMT2024, CICIoT2023
+and UNSW2019 datasets.
+
+In 2025, Catillo et al.\ \cite{catillo2025multicids} proposed MultiCIDS, which
+treats IoT and cyber-physical-system monitoring data as multivariate time
+series rather than isolated points, pipelining a semi-supervised autoencoder
+that produces a per-point anomaly score with a sliding-window algorithm that
+aggregates evidence into collective intrusion decisions, evaluated across
+benchmark traces from IoT devices, a cyber-physical system and a ubiquitous
+server. In 2026, Kilichev and Kim \cite{kilichev2026hybrid} proposed a
+label-free hybrid framework that pairs an offline random-forest teacher with an
+online Long Short-Term Memory student, combining probability calibration,
+Mahalanobis-distance distribution monitoring and Page--Hinkley drift detection
+under a leakage-resistant three-way protocol, reporting 0.9893 accuracy and a
+mean latency of 12.97\,ms per sample on CICIoMT2024. These studies advance
+accuracy, dataset diversity, or real-time adaptation to concept drift, but none
+targets microcontroller-class execution or reports weight storage in
+kilobytes and the reported inference timings, where given, are not measured
+on a resource-constrained embedded device.
+
+The common limitation in this group is therefore not a lack of model variety,
+but the absence of a jointly reported accuracy--memory--latency trade-off
+under a deployment-oriented split. ATOM-IDS is evaluated against that
+trade-off rather than against accuracy alone.
+
+Recent papers in the \emph{IETE Journal of Research} reflect the same emphasis
+on learning-based network defence. Misbha et al.\ combine word embeddings,
+convolution and bidirectional recurrence for IoT DDoS and man-in-the-middle
+detection \cite{misbha2024security}; Grandhi et al.\ integrate a convolutional
+GRU detector into an SDN--IoT security framework
+\cite{grandhi2025secure}; and Yadav and Kumar modify an adaptive
+neuro-fuzzy inference system for CICIDS2017 and UNSW-NB15
+\cite{yadav2026anfis}. In wireless sensor networks, Ram and Saminathan use an
+optimised self-attention progressive GAN \cite{ram2025sapgan}, Hemalatha et
+al.\ propose an interpretable additive neural detector
+\cite{hemalatha2025igann}, and Divya and Kumar combine feature selection with
+a cross-stage partial recurrent network \cite{divya2026crossstage}. These six
+studies motivate the section organisation adopted here and provide recent
+journal-specific comparators. Their evaluations, however, do not report the
+joint microcontroller measurements of flash, working memory, latency, energy,
+and host--device parity reported for ATOM-IDS.
+
+\subsection{Lightweight and transformer-based IDS}
+\label{sec:related:lightweight}
+
+In 2023, Wang et al.\ \cite{wang2023dynquant} applied dynamic quantisation to
+compress an IoT intrusion detection model for edge execution while retaining
+accuracy. The same line of work later used the BERT-of-Theseus module
+replacement \cite{wang2024theseus}, substituting transformer blocks with
+smaller successors during training so that compression and learning proceed
+together. In 2024, Manocchio et al.\ \cite{manocchio2024flowtransformer}
+released Flow Transformer, a modular framework in which the input encoding,
+transformer body and classification head are interchangeable and showed that
+the head dominates both accuracy and model size.
+
+In 2025, Wu et al.\ \cite{wu2025tracer} proposed TRACER, an attack-aware
+divide-and-conquer transformer for industrial IoT that routes traffic to
+specialised sub-detectors. In 2025, Akuthota and Bhargava
+\cite{akuthota2025transformer} reported a transformer-based IoT detector
+competitive with recurrent baselines. These designs substantially reduce
+parameter count, yet retain per-feature tokenisation and self-attention and
+report latency on desktop hardware, so the compression demonstrated does not
+establish microcontroller feasibility.
+
+This distinction motivates a direct tokenising baseline in the experiments:
+the comparison measures both predictive performance and the intermediate
+activation state that must be resident on the device.
+
+\subsection{TinyML and on-device intrusion detection}
+\label{sec:related:tinyml}
+
+In 2025, Hamdouchi and Idri \cite{hamdouchi2025tinyml} compared three singular
+classifiers (decision tree, Gaussian na\"{\i}ve Bayes, multilayer perceptron)
+against three tree ensembles (random forest, XGBoost, extra trees) on an
+Arduino Uno using the NF-ToN-IoT-v2 and NF-BoT-IoT-v2 datasets, ranking them by
+the Scott-Knott test and Borda count voting, with Cohen's kappa, latency,
+static RAM and flash memory. Their overall conclusion favoured singular
+models, with a 20-feature, 56-unit multilayer perceptron the best model on
+NF-ToN-IoT-v2 ($\kappa = 0.935$, 7,010 bytes of static RAM,
+\SI{9.6}{\micro\second} latency). the single fastest and smallest result
+across both datasets, however, was a 13-feature extra-trees ensemble on
+NF-BoT-IoT-v2, at $\kappa = 0.974$, 4,730 bytes of static RAM and
+\SI{8}{\micro\second} latency. In 2025, Amuthadevi et al.\
+\cite{amuthadevi2025graboost} proposed GraBoost-AAGT, coupling adaptive
+artificial gorilla troops optimisation with extreme gradient boosting after
+Z-score normalisation and Fast Fourier Transform-based feature extraction,
+reporting 99.50\% accuracy with reduced CPU and energy overhead.
+
+In 2025, Fusco et al.\ \cite{fusco2025siamese} combined Siamese neural networks
+with gradient sparsification for few-shot federated training on microcontroller
+units, selecting the sparsification ratio each round by an epsilon-greedy
+reinforcement learning policy. In 2026, Ortiz-Garcés et al.\
+\cite{ortizgarces2026nas} applied hardware-aware Neural Architecture Search
+over a feature-aligned corpus drawn from TON\_IoT, IoT-23 and Edge-IIoTset,
+compressing it to 32--64 features, retaining over 99\% of the informative
+variance and validated the model at \SI{2.48}{\milli\second} latency, under
+20\,KB of RAM and \SI{0.39}{\milli\joule} per inference. The wider TinyML
+systems literature explains why such measurement is necessary. TensorFlow Lite
+Micro \cite{david2021tflm} shows that interpreter and kernel design dominate
+execution time, MCUNet \cite{lin2020mcunet} shows that architecture and memory
+scheduling must be co-designed under a fixed SRAM budget and MLPerf Tiny
+\cite{banbury2021mlperftiny} standardises embedded latency and energy
+measurement. These systems confirm that on-device detection is achievable, but
+each deploys an established model family rather than reconsidering the operator
+itself.
+
+ATOM-IDS follows the same measurement discipline while changing the operator
+that builds the representation: feature encodings are accumulated into a fixed
+number of groups, so the activation state is independent of the feature count.
+
+\subsection{Tabular representation learning and evaluation integrity}
+\label{sec.related.tabular}
+
+Because a flow record is tabular rather than sequential, representation has
+been studied independently of intrusion detection. FT-Transformer
+\cite{gorishniy2021revisiting} embeds each feature as a token and applies
+self-attention across the sequence, while TabNet \cite{arik2021tabnet} applies
+sequential attention masks at each decision step. both materialise a
+per-feature intermediate representation that grows with the feature count.
+Grinsztajn et al.\ \cite{grinsztajn2022why} found tree-based models still
+outperform deep networks on typical tabular data and Shwartz-Ziv and Armon
+\cite{shwartzziv2022tabular} reached the same conclusion across a range of
+benchmarks, which is why a gradient-boosted arm is retained as a reference
+here. Gorishniy et al.\ \cite{gorishniy2022embeddings} showed that
+quantile-binned embeddings of numerical features substantially improve tabular
+networks, a result that the proposed encoder adopts.
+
+Benchmarking practice is a further concern. Sarhan et al.\
+\cite{sarhan2022standard} observed that IDS datasets lack a common feature set
+and that socket identifiers can leak the label almost directly. Pendlebury et
+al.\ \cite{pendlebury2019tesseract} showed that random splits let a classifier
+memorise campaign artefacts that will not recur in deployment. Arp et al.\
+\cite{arp2022dos} catalogued these and related pitfalls across security machine
+learning. Shafi and Habibi Lashkari \cite{shafi2025iotzwave} address a related
+gap from the dataset side, profiling smart-home devices and characterising
+Z-Wave traffic and intruder behaviour to build a large-scale, multi-protocol
+IoT intrusion detection dataset, which underlines how much a reported
+accuracy depends on the dataset it was measured against. Accuracy reported
+without leakage control and a temporal split, therefore, does not characterise
+field behaviour.
+
+The present study consequently reports temporal within-dataset results for all
+three corpora and labels CICIDS2017 explicitly as an external enterprise
+traffic check. It does not claim unseen-campaign transfer because the model is
+trained and tested separately within each corpus.
+
+
+Table~\ref{tab:related-compare} positions ATOM-IDS against the closest
+deployed or dataset-scale comparators from the reviewed literature, each on its
+own self-reported metric. 
+
+\begin{table}[!ht]
+\centering
+\caption{ATOM-IDS against the closest deployed or dataset-scale comparators
+from the reviewed literature.}
+\label{tab:related-compare}
+\footnotesize\setlength{\tabcolsep}{3pt}
+\renewcommand{\arraystretch}{1.15}
+\begin{tabular}{@{}p{2.0cm}p{2.4cm}p{1.6cm}p{2.0cm}p{1.55cm}p{1.95cm}@{}}
+\toprule
+Study & Dataset(s) & Hardware & Deployed metric & Latency & Memory \\
+\midrule
+Hamdouchi \& Idri \cite{hamdouchi2025tinyml} &
+  NF-ToN/BoT-IoT-v2 & Arduino Uno &
+  $\kappa = 0.974$ & \SI{8}{\micro\second} & 4,730\,B SRAM \\
+Ortiz-Garc\'{e}s et al.\ \cite{ortizgarces2026nas} &
+  TON\_IoT, IoT-23, Edge-IIoTset & Cortex-M4 / ESP32 &
+  --- & \SI{2.48}{\milli\second} & $<$20\,KB RAM, 0.39\,mJ/inf. \\
+Villafranca \& Cano \cite{villafranca2025edgedl} &
+  18 IoT-IDS datasets & not deployed &
+  99.14\% avg.\ acc.\ & --- & $\sim$1.2M params \\
+\textbf{ATOM-IDS (this work)} &
+  Edge-IIoTset & \textbf{ESP32-S3} &
+  \textbf{macro-F1 $=$ 0.8007} & \textbf{\SI{243.5}{\micro\second}} &
+  \textbf{4,912\,B flash, 0.0096 mJ/inf.} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+To address these limitations, this work proposes ATOM-IDS, an accumulator-based,
+hardware-aware tabular model that removes tokenisation in favour of a fixed-shape grouped
+accumulator, sizes its activation state by the group count rather than the
+feature count, is evaluated under a leakage-controlled temporal protocol, and
+is verified for host-device output parity on an ESP32-S3 microcontroller.
+
+
+\fi
+
+\section{Proposed methodology}
+\label{sec:method}
+
+ATOM-IDS is a hardware-aware tabular classifier whose representation is built
+by streaming feature encodings into a fixed number of groups. The forward path
+comprises leakage-controlled preprocessing, a fused binned and rank-1 encoder,
+balanced fixed grouping, power-of-two rescaling, a shared residual perceptron
+and a linear classifier. Figure~\ref{fig:arch} shows this path and
+Algorithm~\ref{alg:atom} states the training and export procedure.
+
+\begin{figure}[!t]
+\centering
+\includegraphics[width=0.96\linewidth,height=0.67\textheight,keepaspectratio]{figs/fig1_architecture.pdf}
+\caption{Architecture of the proposed ATOM-IDS framework.}
+\label{fig:arch}
+\end{figure}
+
+\subsection{Dataset description and preprocessing}
+\label{sec:method:data}
+
+Three datasets test the architecture under different schemas.
+Edge-IIoTset \cite{ferrag2022edgeiiotset} contains 2.22 million flow records
+from an IoT/IIoT testbed, with benign traffic and 14 attack classes.
+CIC-IIoT-2025 \cite{firouzi2025datasense} provides per-device window
+aggregates; this study uses its one-second windows and eight-class categorical
+labels. CICIDS2017 \cite{sharafaldin2018cicids} contains 2.83 million
+bidirectional enterprise flows collected over five days and 15 classes. It is
+used as an external enterprise-traffic robustness benchmark, not as an IoT
+dataset or an unseen-dataset transfer test. Every model is trained and tested
+separately within each corpus. Table~\ref{tab:datasets} gives the retained
+feature count $N$, class count $C$ and partition sizes.
+
+\begin{table}[!ht]
+\centering
+\caption{Dataset description after leakage control.}
+\label{tab:datasets}
+\begin{tabular}{lrrrrr}
+\toprule
+Dataset & $N$ & $C$ & Train & Val & Test \\
+\midrule
+Edge-IIoTset  & 54 & 15 & 385,478 & 120,669 & 117,959 \\
+CIC-IIoT-2025 & 71 &  8 &  78,851 &  26,511 &  23,230 \\
+CICIDS2017    & 70 & 15 & 201,385 &  66,851 &  67,404 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Preprocessing follows one discipline across the three corpora. First, direct
+identifiers and label shortcuts are removed. These include flow identifiers,
+addresses, ports, payload-like strings, URIs, DNS names, MQTT topics and any
+binary attack flag that directly reveals the multiclass target. CICIDS2017
+retains its numeric protocol field as a categorical feature. CIC-IIoT-2025
+retains numeric count summaries but not the raw identifier-list fields. This
+restriction follows security-ML guidance on shortcut leakage
+\cite{arp2022dos,sarhan2022standard}.
+
+Second, a class-stratified chronological split assigns the earliest 60\% of
+each class to training, the next 20\% to validation and the final 20\% to
+testing. Edge-IIoTset uses frame time, CIC-IIoT-2025 uses window start and
+CICIDS2017 uses flow time with capture order breaking timestamp ties. For
+CICIDS2017, rank within each class is used because minute-resolution ties can
+otherwise collapse a short attack burst into one partition. This construction
+keeps every class represented and preserves order \emph{within} each class. It
+is not a globally disjoint time-window evaluation: timestamps from different
+classes may overlap across partitions. It therefore measures within-campaign,
+class-stratified temporal generalisation and makes no claim about an unseen
+campaign or attack family \cite{pendlebury2019tesseract}.
+
+Third, exact repetitions are controlled before sampling. The duplicate key is
+the retained raw feature set together with the class label; the first record in
+source order is kept and later occurrences of that same feature-label tuple
+are removed. Thus differently labelled collisions are retained. This operation
+removes 14.0\% of Edge-IIoTset rows and 35.1\% of CIC-IIoT-2025 windows. It
+does not fit a statistic, alter a value or move a record between temporal
+partitions. Within each partition and class, records above the stated budget
+are sampled without replacement using preprocessing seed 0. The respective
+train/validation/test caps are 60,000/20,000/20,000 for Edge-IIoTset,
+30,000/10,000/10,000 for CIC-IIoT-2025 and 60,000/20,000/20,000 for
+CICIDS2017.
+
+All fitted transforms use training data only. Numeric parse failures and
+non-finite training medians are replaced by the training median or zero when
+that median is itself non-finite. Edge-IIoTset categorical vocabularies contain
+the 15 most frequent training levels plus an \texttt{OTHER} indicator, which
+also receives unseen validation and test levels. Training-constant columns are
+dropped. Non-negative heavy-tailed lengths, sizes, checksums, sequence fields
+and counts are clipped below at zero and transformed by $\log(1+x)$. Remaining
+features are z-scored with training means and standard deviations and clipped
+to $[-8,8]$. The resulting vocabularies, medians, scaling statistics and
+feature order are reused unchanged for validation, testing and firmware export.
+
+\subsection{Fused binned-embedding and rank-1 encoder}
+\label{sec:method:encoder}
+
+Let $x\in\mathbb{R}^{N}$ be a standardised record. For feature $i$, seven
+training-set empirical quantiles define $B=8$ bins; repeated quantiles are
+retained, so tied or near-constant features may have fewer than eight effective
+intervals. If $b_i(x_i)$ is the number of edges strictly below $x_i$, the
+feature encoding is
+
+\begin{equation}
+\label{eq:encoder}
+e_i=E[i,b_i(x_i)]+x_iV[i],
+\end{equation}
+
+where $E\in\mathbb{R}^{N\times B\times d}$ is a learned lookup table and
+$V\in\mathbb{R}^{N\times d}$ supplies a rank-1 linear direction. The lookup
+provides piecewise-constant nonlinearity without multiplications, while the
+rank-1 term preserves within-bin variation at $d$ multiply-accumulates (MACs)
+per feature. This design adopts the demonstrated value of numerical feature
+embeddings \cite{gorishniy2022embeddings} without retaining a feature-length
+token sequence after encoding.
+
+\subsection{Balanced fixed grouping}
+\label{sec:method:grouping}
+
+The feature indices are assigned to $K$ groups by shuffling the repeating
+sequence $0,1,\ldots,K-1$ with topology seed 0. Group sizes therefore differ by
+at most one and no group is empty when $N\geq K$. This single balanced map is
+fixed for every dimension, training seed and quantisation run within a corpus;
+it is not selected by validation performance. The group state is
+
+\begin{equation}
+\label{eq:group}
+G_k=\sum_{i:g(i)=k}e_i.
+\end{equation}
+
+The implementation orders features so that group members are contiguous and
+streams each encoding directly into its destination accumulator. It never
+materialises the $N\times d$ encoding stack. The live group state is therefore
+$K\times d$ elements, independent of $N$, although the input vector, bin edges
+and stored encoder remain linear in $N$. The deployed kernel holds the
+accumulator in float32, so its byte cost is four times its element count.
+
+The deployed model is the $R=1$ case of an earlier adaptive design. Its
+$R=4$ control contains four candidate assignment matrices and a width-8 router
+that selects a codebook entry for each input. That control is retained only for
+the matched ablation in Section~\ref{sec:ablation}; deployment uses the single
+fixed map above. Because the production map is constant, variation across the
+reported training seeds measures optimisation stability, not sensitivity to
+the topology. Independently redrawn balanced maps were not evaluated and are
+listed as future work.
+
+\subsection{Power-of-two rescaling}
+\label{sec:method:pow2}
+
+Training learns one unrestricted scale $\alpha_k$ per group. At export, it is
+converted to a signed integer exponent
+
+\begin{equation}
+\label{eq:pow2}
+q_k=\mathrm{round}\!\left(\log_2(|\alpha_k|+10^{-8})\right),\qquad
+G_k\leftarrow 2^{q_k}G_k.
+\end{equation}
+
+Thus the firmware stores $K$ exponents rather than $K$ floating-point scales.
+The export-time rounding is deterministic and no gradient through
+$\mathrm{round}(\cdot)$ is claimed. In a future integer-only kernel the factor
+$2^{q_k}$ can be implemented as a shift; in the measured float32 kernel it is
+an exactly representable binary scaling. Predictive effects of this constraint
+belong to the quantisation ablation in Section~\ref{sec:quant}, rather than to
+the method definition.
+
+\subsection{Residual refinement and classification}
+\label{sec:method:head}
+
+A two-layer residual perceptron is shared across all groups:
+
+\begin{equation}
+\label{eq:refine}
+G_k\leftarrow G_k+\gamma\left[W_2\,\mathrm{ReLU}(W_1G_k+b_1)+b_2\right],
+\end{equation}
+
+where $W_1\in\mathbb{R}^{h\times d}$,
+$W_2\in\mathbb{R}^{d\times h}$, $h=\max(2,\lfloor d/2\rfloor)$, and
+$\gamma$ is learned. The biases $b_1$ and $b_2$ are included in both training
+and firmware. Sharing makes this refinement independent of $K$ in parameter
+count. The refined groups are concatenated and mapped to class logits,
+
+\begin{equation}
+\label{eq:head}
+z=W_c[G_1;\ldots;G_K]+b_c,\qquad \hat y=\arg\max_c z_c.
+\end{equation}
+
+Concatenation is necessary because direct mean pooling would make every fixed
+partition identical to the mean of all feature encodings and would discard
+which group received each feature.
+
+\subsection{Computational and storage cost}
+\label{sec:method:cost}
+
+Ignoring bias additions and nonlinearities, the analytic MAC count is
+
+\begin{equation}
+\label{eq:macs}
+\mathrm{MACs}=Nd+K(2dh)+KdC.
+\end{equation}
+
+The encoder lookup contributes no MACs. Group formation additionally requires
+$Nd$ additions, binning requires at most $N(B-1)$ ordered comparisons, and
+rescaling requires $Kd$ binary scalings in the measured kernel. These
+operations are included in device latency even though they are not counted as
+MACs. There is no attention term quadratic in $N$.
+
+Storage and working memory are reported separately. The INT8 weight count
+contains $E$, $V$, $W_1$, $W_2$ and $W_c$. The complete read-only artifact also
+contains float biases and scales, the gate, quantile edges, permutation, group
+boundaries and shift exponents. Consequently, the ``INT8 weight bytes'' columns
+in the deployment tables must not be interpreted as total firmware flash;
+Table~\ref{tab:device-summary} reports the complete constant
+footprint. Working memory includes the input, group accumulator, refined group
+copy, hidden vector and output logits.
+
+The accounting can be checked directly from the architecture. For
+Edge-IIoTset at $d=8$, $K=8$ and $C=15$, the stored INT8 matrices contain
+$N B d=3{,}456$ embedding entries, $N d=432$ rank-1 entries, 64 residual-layer
+weights and $K d C=960$ classifier weights, totalling 4,912 weight bytes. The
+trained model additionally contains 27 biases, the residual gate and eight
+group scales, giving 4,948 learned scalar parameters. At export, the group
+scales become eight shift exponents, while the full header adds the bin edges,
+permutation, group boundaries, float scales and biases. This reconciliation is
+used for every configuration and prevents parameter count, quantised weight
+storage and total read-only storage from being treated as interchangeable.
+
+Feature count affects storage more strongly than arithmetic in this design.
+The $E$ and $V$ tensors grow linearly with $N$, whereas the group state remains
+$K d$ and the classifier depends on $K d C$. Consequently, feature selection
+would primarily reduce the embedding table and bin-edge footprint. It removes
+only the corresponding $d$ encoder MACs per feature and does not alter the
+residual or classifier terms. This distinction matters when comparing ATOM-IDS
+with TinyML studies that use feature selection as their main compute-reduction
+mechanism \cite{hamdouchi2025tinyml}.
+
+\begin{algorithm}[!t]
+\caption{ATOM training and on-device evaluation.}
+\label{alg:atom}
+\KwIn{Raw records, topology seed 0, training seed $s$, $d$, $K$, $B=8$.}
+\KwOut{Macro-F1, per-class metrics, latency, memory, energy and parity.}
+Remove identifiers and assign class-stratified chronological partitions\;
+Within each class, retain the first occurrence of each feature-label tuple;
+sample capped strata with seed 0\;
+Fit imputation, encoding, scaling and bin edges on training data only\;
+Construct one balanced group map with topology seed 0 and freeze it\;
+Initialise $E,V,W_1,b_1,W_2,b_2,W_c,b_c,\alpha$ and $\gamma$ with seed $s$\;
+\For{$\mathrm{epoch}=1$ \KwTo $25$}{
+  Encode by \eqref{eq:encoder}, accumulate by \eqref{eq:group}, refine by
+  \eqref{eq:refine} and classify by \eqref{eq:head}\;
+  Step Adam on class-weighted cross-entropy and retain the best validation checkpoint\;
+}
+Apply PTQ or QAT; round group scales by \eqref{eq:pow2}; emit the C header\;
+Flash the ESP32-S3 and verify 1,000 host-device class indices\;
+Measure warm median latency, complete memory footprint and differential energy\;
+\end{algorithm}
+
+\subsection{Training, quantisation and device measurement}
+\label{sec:method:training}
+
+All neural models use Adam with learning rate $3\times10^{-3}$, batch size
+1024 and 25 epochs. Inverse-frequency class weights are applied to
+cross-entropy, and the checkpoint with the highest validation macro-F1 is
+retained. Weighting changes the objective without synthesising records across
+a temporal boundary, unlike applying an oversampler before splitting. The
+FP32 frontier uses ten training seeds. These seeds control PyTorch and NumPy
+initialisation and minibatch order; they do not redraw the fixed group map.
+
+All neural comparators consume the same cached partitions and transformed
+feature vectors. The MLP arms use the same optimiser, loss, epochs, batch size,
+checkpoint rule and training seeds. The matched transformer additionally uses
+the same binned-plus-rank-1 encoder, so the remaining architectural difference
+is self-attention over $N+1$ tokens versus accumulation into $K$ groups.
+Gradient-boosted trees are retained as a predictive reference but are neither
+placed on the neural MAC axis nor deployed, because node traversal is not
+equivalent to a dense MAC count. These rules keep causal comparisons within
+the present experiment rather than across incompatible studies.
+
+The quantisation study distinguishes PTQ, QAT and deployment. Weights are
+stored with symmetric per-tensor INT8 scales. During QAT, unsigned asymmetric
+8-bit fake quantisers with explicit zero points are applied at the input and
+intermediate activation sites, while straight-through estimators pass gradients
+through weight and activation rounding. Biases and the residual gate remain
+float32. At export, the learned group scales are converted to the integer
+exponents of \eqref{eq:pow2}. A C header then records INT8 weights, float
+scales and biases, bin edges, the balanced permutation, group boundaries and
+shift exponents.
+
+The deployed implementation is accurately described as \emph{INT8-weight,
+FP32-arithmetic}. It reads INT8 weights from flash, dequantises them with their
+per-tensor scales and performs products, accumulation, activations and group
+state storage in float32. Fake-quantised activation values used during QAT are
+reproduced, but activations are not stored or accumulated as integers on the
+device. Therefore, the reported weight-storage reduction is real, while the
+measurements do not establish integer-only latency. An int8-by-int8/int32
+kernel of the TensorFlow Lite Micro type \cite{david2021tflm} remains future
+work.
+
+Firmware is compiled with the Arduino ESP32 core for an ESP32-S3 at 240 MHz.
+For every deployed build, 1,000 test records selected without replacement with
+seed 0 are replayed and device class indices are checked against host indices.
+All 15 builds attain 1,000/1,000 agreement. Latency is the median of 256 warm
+inferences measured in CPU cycles; the first cache-cold call is reported
+separately. Energy is obtained from the difference between active and idle
+power multiplied by measured inference time, using the protocol of
+Section~\ref{sec:energy}. Feature extraction from raw packets is outside the
+timed region for every model.
+
+Parity is defined on the predicted class index rather than exact logits. This
+detects export errors that alter a decision while allowing harmless numerical
+differences below the decision boundary. The 1,000 replayed records are a
+deterministic verification sample, not another accuracy test; macro-F1 is
+computed on the complete held-out test partition. Likewise, latency covers
+classification of a precomputed feature vector and excludes packet capture,
+flow assembly and feature extraction. The energy value is therefore
+model-inference energy under the stated conditions, not the total energy of an
+end-to-end network monitor.
+
+\iffalse
+
+This work proposes ATOM-IDS, an accumulator-based, hardware-aware tabular model
+built around a novel fixed-shape grouped accumulator and designed to execute
+within the storage and latency budget of a microcontroller-class endpoint. Raw
+flow records are first pre-processed under a leakage-controlled
+protocol, then encoded by a fused binned-embedding and rank-1 operator,
+accumulated into a fixed number of random groups, rescaled by a power-of-two
+shift, refined by a weight-shared residual multilayer perceptron, and
+classified from the concatenated group state. Figure~\ref{fig:arch} shows the
+forward pass, and Algorithm~\ref{alg:atom} summarises construction, training
+and on-device evaluation.
+
+\begin{figure}[!t]
+\centering
+\includegraphics[width=0.96\linewidth,height=0.67\textheight,keepaspectratio]{figs/fig1_architecture.pdf}
+\caption{Architecture of the proposed ATOM-IDS framework.}
+\label{fig:arch}
+\end{figure}
+
+\subsection{Dataset description and preprocessing}
+\label{sec:method:data}
+
+ATOM-IDS is evaluated on three intrusion-detection datasets with distinct data
+schemas. Edge-IIoTset \cite{ferrag2022edgeiiotset} is a flow-based dataset
+containing 2.22 million records across 15 classes, including 14 attack families
+and benign traffic, collected from a purpose-built IoT/IIoT testbed.
+CIC-IIoT-2025 \cite{firouzi2025datasense} provides per-device, per-time-window
+feature aggregates, from which the 1-second window and 8-class categorical
+labels are used in this study. CICIDS2017 \cite{sharafaldin2018cicids} is the
+long-standing enterprise-capture benchmark for this field, comprising 2.83
+million bidirectional flows over a five-day capture with 15 classes. It is
+included as an external enterprise-traffic robustness benchmark, since it is
+neither an IoT testbed nor a per-device aggregate and its wide prior use makes
+the architecture's behaviour directly comparable with published work. The
+experiments remain within-dataset temporal evaluations. CICIDS2017 is not
+presented as an unseen-dataset transfer test.
+Table~\ref{tab:datasets} summarises the three datasets after preprocessing,
+where $N$ denotes the number of retained features and $C$ the number of
+classes.
+
+\begin{table}[!ht]
+\centering
+\caption{Dataset description after leakage control.}
+\label{tab:datasets}
+\begin{tabular}{lrrrrr}
+\toprule
+Dataset & $N$ & $C$ & Train & Val & Test \\
+\midrule
+Edge-IIoTset  & 54 & 15 & 385,478 & 120,669 & 117,959 \\
+CIC-IIoT-2025 & 71 &  8 &  78,851 &  26,511 &  23,230 \\
+CICIDS2017    & 70 & 15 & 201,385 &  66,851 &  67,404 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+All three datasets are processed under a single discipline intended to prevent
+the label from leaking through identifying fields. First, socket identifiers,
+comprising source and destination addresses and all port fields, are dropped
+together with high-cardinality application-layer strings such as payloads,
+URIs, DNS query names and MQTT topics, and with any binary attack flag that
+acts as a direct shortcut to the multi-class label. On CICIDS2017 this removes
+the flow identifier, both addresses and both port fields, while the numeric
+protocol field is retained as a categorical feature. These fields identify
+attacks almost directly \cite{arp2022dos} and account for much of the
+implausibly high accuracy reported on these corpora \cite{sarhan2022standard}.
+On CIC-IIoT-2025 the raw identifier list columns are removed while their
+numeric count companions are retained. Second, the retained feature columns are
+deduplicated globally, so that an identical feature vector cannot appear in two
+partitions. this removes 14.0\% of Edge-IIoTset rows and 35.1\% of
+CIC-IIoT-2025 windows. Because this filter runs before the partitions are
+populated, its scope is stated precisely. It removes rows and never edits them,
+the partition boundaries are fixed by timestamp independently of it, and every
+fitted statistic in the third step below is computed on the training partition
+after splitting, so no value, label or statistic from a validation or test
+record enters training. Second, categorical fields on Edge-IIoTset are
+one-hot encoded using the fifteen most frequent levels plus an indicator for
+all others, heavy-tailed numeric fields such as lengths, sizes, checksums and
+counts are compressed by a $\log(1+x)$ transform, and all numeric features are
+standardised by z-scoring on training statistics and clipped to the range plus
+or minus eight.
+
+Each class is then split 60/20/20 by timestamp, using frame time on
+Edge-IIoTset, window start on CIC-IIoT-2025 and flow timestamp on CICIDS2017,
+so that the model never trains on the future of a campaign against which it is
+later tested while every class remains present in every partition. On
+CICIDS2017 the split is taken over the \emph{rank} of each record in
+chronological order rather than over the timestamp value, with ties broken by
+capture order. The distinction matters on that corpus and is recorded here
+because it is easy to get wrong: its timestamps are minute-resolution and
+several attacks are captured in a single short burst, so a class can have
+identical 60th and 80th percentile timestamps, and a value-based comparison
+then places every record of that class in one partition. Splitting on rank
+keeps the partition chronological while guaranteeing the intended proportions
+for every class regardless of timestamp granularity. a class left with no test
+support would otherwise score zero F1 for every model and depress macro-F1 by
+$1/C$ uniformly, which is a measurement artefact rather than a result. Because
+all three datasets are dominated by a few classes, each split is additionally
+capped per class, at 60,000/20,000/20,000 records on Edge-IIoTset,
+30,000/10,000/10,000 on CIC-IIoT-2025 and 60,000/20,000/20,000 on CICIDS2017. Categorical
+vocabularies, z-scoring statistics and quantile bin edges are fitted on the
+training partition alone and reused unchanged for validation, test and device
+export. This is a within-campaign temporal split. It measures temporal
+generalisation and does not hold out an unseen campaign or attack family, a
+boundary stated explicitly rather than left to be inferred
+\cite{pendlebury2019tesseract}.
+
+\subsection{Fused binned-embedding and rank-1 encoder}
+\label{sec:method:encoder}
+
+Let $x$ be the standardised feature vector of one flow, with $N$ components.
+For each feature $i$, let $\mathrm{bin}(x_i)$ denote the index of the quantile
+bin into which $x_i$ falls, where the bin edges are the $B-1$ interior
+empirical quantiles of feature $i$ computed on the training partition, with
+$B = 8$. The encoding of feature $i$ is
+
+\begin{equation}
+\label{eq:encoder}
+e_{i} \;=\; E\!\left[i,\, \mathrm{bin}(x_{i})\right] \;+\; x_{i}\, V\!\left[i\right],
+\end{equation}
+
+where $E$ is a learned embedding table of shape $N \times B \times d$ and $V$
+is a learned rank-1 direction of shape $N \times d$. The lookup term costs
+storage but no multiplications, so only the rank-1 term contributes $d$
+multiply-accumulate operations per feature. The binned term supplies the
+nonlinearity that a pure rank-1 map lacks: with the rank-1 term alone the
+entire feature path reduces to a structured-sparse linear map and accuracy
+collapses towards logistic regression, which Section~\ref{sec:ablation}
+quantifies. This encoder follows the established
+evidence that quantile-binned embeddings materially improve tabular networks
+\cite{gorishniy2022embeddings}.
+
+\subsection{Grouped accumulation with fixed random topology}
+\label{sec:method:grouping}
+
+A frozen assignment $g$, mapping each of the $N$ feature indices to one of $K$
+groups, is drawn once uniformly at random and never trained. The group state is
+the sum of the encodings assigned to that group,
+
+\begin{equation}
+\label{eq:group}
+G_{k} \;=\; \sum_{i \,:\, g(i)\,=\,k} e_{i}.
+\end{equation}
+
+The sum is formed by accumulating each encoding directly into its destination
+group, so the $N \times d$ stack of encodings is never held in memory. Peak
+activation state is therefore the $K \times d$ accumulator, whose element count
+is independent of the feature count. only the input vector and the bin edges
+remain of order $N$. This is a statement about the number of live elements
+rather than about their runtime type: the deployed kernel of
+Section~\ref{sec:method:training} holds those $K \times d$ elements as float32,
+so the byte figures in Tables~\ref{tab:mem-edge} and \ref{tab:mem-cic} are the
+element count multiplied by four, and an integer-only kernel would reduce the
+constant without changing the order. On device the features are gathered into a
+permuted order in which the members of a group are contiguous, so each group
+accumulator stays resident across its whole range and no scattered writes are
+performed. This structure is closer to a tied-weight, hard-routed mixture
+\cite{shazeer2017moe} than to a transformer, but the routing is fixed rather
+than input-conditional.
+
+The fixed assignment used above is the $R = 1$ case of a more general operator,
+and $R$ is defined here because the ablation of Section~\ref{sec:ablation}
+varies it. Let the codebook $C_b$ be a tensor of shape $R \times N \times K$
+holding $R$ candidate assignment matrices, each of whose $N$ rows is a one-hot
+distribution over the $K$ groups, and let a small input-conditional router map
+the standardised input through a two-layer network of width 8 to a one-hot
+selection $r(x)$ over the $R$ entries. The effective assignment is then
+$A(x) = \sum_{r} r_{r}(x)\, C_{b,r}$, and the group state of
+\eqref{eq:group} becomes $G_{k} = \sum_{i} A(x)_{ik}\, e_{i}$. The parameter
+$R$ is therefore the size of the topology codebook: the number of distinct
+feature-to-group assignments the router may select between for a given input.
+Setting $R = 1$ collapses $r(x)$ to a constant, removes the router, freezes $A$
+to the single random map $g$, and recovers exactly the deployed model described
+above. Setting $R > 1$ adds the learned codebook and input-conditional routing
+at a cost of $8N + 8R$ further multiply-accumulate operations per inference,
+plus the codebook parameters. ATOM-IDS deploys $R = 1$. the $R = 4$ variant is
+trained only as the control against which that choice is tested in
+Section~\ref{sec:ablation}.
+
+\subsection{Power-of-two group requantisation}
+\label{sec:method:pow2}
+
+Each group is rescaled by a learned per-group factor constrained to the nearest
+power of two,
+
+\begin{equation}
+\label{eq:pow2}
+G_{k} \;\leftarrow\; 2^{\,\mathrm{round}(\log_{2} \alpha_{k})}\, G_{k},
+\end{equation}
+
+so that the rescale is exactly representable in binary and reduces, under a
+pure-integer kernel, to an arithmetic shift rather than a general
+multiplication. The constraint also removes $K$ freely learned per-group scales
+from the parameter set. At $d = 8$ its accuracy cost relative to a free
+per-group scale is within seed noise, at $+0.002$ macro-F1. at $d = 24$ it
+costs 0.013 macro-F1 on Edge-IIoTset and 0.024 on CIC-IIoT-2025, consistently
+across seeds. The constrained form is the one retained in the deployed INT8
+path.
+
+\subsection{Residual refinement and classification head}
+\label{sec:method:head}
+
+A single two-layer residual multilayer perceptron, with weights shared across
+all $K$ groups, refines each group vector,
+
+\begin{equation}
+\label{eq:refine}
+G_{k} \;\leftarrow\; G_{k} \;+\; \gamma\, W_{2}\, \mathrm{ReLU}(W_{1}\, G_{k}),
+\end{equation}
+
+where $W_{1}$ has shape $(d/2) \times d$, $W_{2}$ has shape $d \times (d/2)$,
+and $\gamma$ is a scalar gate. Sharing the weights across groups keeps the
+parameter cost independent of $K$. The $K$ refined vectors are then
+concatenated and classified by a single linear layer,
+
+\begin{equation}
+\label{eq:head}
+\hat{y} \;=\; \mathrm{softmax}\!\left(W_{c}\,[\,G_{1};\, \ldots;\, G_{K}\,] + b_{c}\right).
+\end{equation}
+
+The readout is concatenation rather than pooling, and this is a requirement
+rather than a preference. For a readout applied directly to the grouped sums of
+\eqref{eq:group}, the mean over groups equals the mean over all encodings for
+every assignment $g$, so all groupings present the classifier with an identical
+vector and the topology becomes unlearnable. Placing the pool after the rescale
+and the refinement weakens this identity without repairing it, because the
+outer sum still discards which group each feature was assigned to.
+
+\subsection{Computational cost}
+\label{sec:method:cost}
+
+The analytic multiply-accumulate count per inference is the sum of the rank-1
+encoder, the shared residual perceptron and the classifier,
+
+\begin{equation}
+\label{eq:macs}
+\mathrm{MACs} \;=\; N\,d \;+\; K\left(2\,d\,\lfloor d/2 \rfloor\right) \;+\; K\,d\,C,
+\end{equation}
+
+with the binned lookup contributing none. There is no term quadratic in $N$ and
+no term quadratic in $K$, which is the property that makes the cost a fixed
+shape set by $(N, d, K, C)$. Deployed INT8 weight storage, by contrast,
+includes the full embedding table, of which only one bin per feature is read
+per inference. Flash therefore exceeds the multiply-accumulate count, and this
+flash-for-compute trade is quantified in Section~\ref{sec:ondevice}.
+
+The parameter columns of Tables~\ref{tab:frontier-edge} and
+\ref{tab:frontier-cic} give the trained tensor count of the deployed $R = 1$
+configuration, and the flash column of Tables~\ref{tab:dev-edge} and
+\ref{tab:dev-cic} gives what is actually flashed, namely the quantised weight
+tensors of the modules defined in Sections~\ref{sec:method:encoder} to
+\ref{sec:method:head}, including the binned embedding table, which contributes
+no multiplications to \eqref{eq:macs}. The two reconcile exactly. For
+Edge-IIoTset at $d = 8$ and $K = 8$, the 4,948 parameters comprise 4,912
+deployed weight bytes, 27 biases, the scalar gate and the 8 per-group shift
+exponents. The same accounting holds for the other deployed configurations:
+15,180 against 15,120 flashed bytes at $d = 24$ on Edge-IIoTset, and 5,717
+against 5,688 and 17,501 against 17,448 on CIC-IIoT-2025.
+
+This accounting also settles where feature selection would help, a lever that
+TinyML detectors such as \cite{hamdouchi2025tinyml} treat as primary. The
+feature count $N$ enters \eqref{eq:macs} only through the rank-1 encoder term
+$N d$, but it enters storage through both the embedding table $N \times B
+\times d$ and the rank-1 direction $N \times d$. On Edge-IIoTset the
+$N$-linear terms are 79.2\% of flash at $d = 8$ and 77.1\% at $d = 24$, of
+which the embedding table alone is roughly seven tenths, whereas the same
+terms are only 22.7\% and 14.8\% of the multiply-accumulate count, which is
+dominated instead by the classifier head at 50.4\% and 32.8\%. Halving the
+feature count would therefore cut the read-only footprint by close to
+40\% while leaving latency largely unchanged. Feature selection is a storage
+lever for this architecture rather than a compute lever, which is the opposite
+of its role in models whose cost is dominated by input width, and it is not
+pursued here because the binding constraint in
+Section~\ref{sec:results} is latency rather than flash.
+
+\subsection{Training protocol and device export}
+\label{sec:method:training}
+
+All neural arms share a single recipe: the Adam optimiser at a learning rate of
+$3 \times 10^{-3}$, a batch size of 1024, 25 epochs, and class-weighted
+cross-entropy with inverse-frequency weights, since the severe class imbalance
+on all three corpora makes plain accuracy misleading. Class weighting is preferred
+here to the resampling pipelines common in this literature, such as the SMOTE
+and Tomek-link stage of \cite{villafranca2025edgedl}, for a reason specific to
+the protocol of Section~\ref{sec:method:data}: synthesising minority examples
+before a chronological split would interpolate new records from neighbours that
+may lie on the other side of the partition boundary, reintroducing the
+contamination the temporal split is constructed to prevent. Weighting the loss
+changes the objective without manufacturing records, and so leaves the split
+intact. The checkpoint retained is the
+one with the best validation macro-F1, and ten seeds are reported per arm on
+all three corpora. Seeds drive weight initialisation, batch order and the draw of
+the group map $g$, so each reported seed uses a different random grouping and
+the seed spread already absorbs topology variance.
+
+After training, the model is quantised to INT8 by either post-training
+quantisation or quantisation-aware training, and a C header is emitted
+containing the quantised weight tensors, the quantile bin edges, the group map
+and the per-group shift exponents. The header is compiled into firmware and
+flashed to the target device, after which the device argmax is compared against
+the host model argmax over 1000 replayed test flows. The criterion is exact
+agreement of the predicted class index, not of the logits. All fifteen deployed
+builds reported in Tables~\ref{tab:dev-edge}, \ref{tab:dev-cic} and
+\ref{tab:dev-cicids} reproduced
+the host prediction on every flow, at 1000/1000 (100.0\%). Reported latency is
+the median of 256 inferences with the cache-cold first call excluded, since
+that call runs high and would skew a plain mean. The exclusion is not
+load-bearing: for the deployed Edge-IIoTset configuration the cold call costs
+\SI{250.2}{\micro\second} against a warm median of \SI{243.5}{\micro\second}, so
+an endpoint classifying flows sporadically rather than back to back would pay
+about \SI{2.8}{\percent} more per inference. This verification
+step is not a formality: it uncovered a silent export defect that was
+subsequently corrected.
+
+The deployed integer path is specified as follows. Weights are quantised to
+INT8 with a single symmetric per-tensor scale for each of the embedding table,
+the rank-1 direction, the two shared perceptron matrices and the classifier.
+activations use an asymmetric unsigned 8-bit quantiser with an explicit zero
+point at the input and again at the group state. and the biases, the residual
+gate and the per-group shift exponents are retained in float. One point is
+stated plainly because it bounds what the measurements establish: the deployed
+kernel reproduces the arithmetic of the host quantisation-aware training loop
+by dequantising each INT8 tensor to float32 and accumulating in float32, so the
+device recomputes the fake-quantised forward pass the host optimised rather
+than approximating it. A pure-integer kernel in the TensorFlow Lite Micro style
+\cite{david2021tflm}, with int8 by int8 products accumulated into int32 and a
+single fixed-point requantisation multiply, is not used here. The INT8 storage
+saving reported in Tables~\ref{tab:dev-edge} and \ref{tab:dev-cic} is therefore
+real and is what is flashed, and the latency reported is the true cost of the
+gather-and-accumulate operator on the LX7 core, but the arithmetic itself is
+float32 and the power-of-two rescale is applied as a multiplication by two to
+the alpha, which is exact in binary floating point. Converting the kernel to
+integer-only arithmetic is left to future work. Firmware was built with the
+Arduino ESP32 core for the ESP32-S3 with the CPU clock fixed at 240\,MHz, and
+latency was counted in CPU cycles on the device.
+
+\begin{algorithm}[!ht]
+\caption{ATOM training and on-device evaluation.}
+\label{alg:atom}
+\KwIn{train/val/test splits. embedding dim $d$, groups $K$, bins $B$, class weights $w$.}
+\KwOut{test macro-F1, per-class F1, measured latency, flash bytes and parity.}
+Compute per-feature quantile bin edges on the training split\;
+Draw fixed random group map $g$ and freeze it\;
+Initialise $E$, $V$, $W_{1}$, $W_{2}$, $W_{c}$, $b_{c}$, group scales and gate\;
+\For{$\mathrm{epoch} = 1$ \KwTo $25$}{
+  \ForEach{minibatch $(x, y)$}{
+    Encode $e_{i}$ by \eqref{eq:encoder}\;
+    Accumulate into $G_{k}$ by \eqref{eq:group}\;
+    Rescale by \eqref{eq:pow2}\;
+    Refine by \eqref{eq:refine}\;
+    Classify by \eqref{eq:head}\;
+    Step Adam on class-weighted cross-entropy\;
+  }
+  Keep the checkpoint with best validation macro-F1\;
+}
+Quantise to INT8 by PTQ or QAT and emit the C header (weights, bin edges, group map, scales)\;
+Flash the ESP32-S3 and verify the device argmax against the host over 1000 flows\;
+Report median latency over 256 inferences, excluding the cold call\;
+\Return test macro-F1, per-class F1, measured latency, flash bytes and parity\;
+\end{algorithm}
+
+\fi
+
+\input{results_compact}
+
+\section{Conclusion}
+\label{sec:conclusion}
+
+ATOM-IDS replaces per-feature tokenisation with a fixed-shape grouped
+accumulator for microcontroller-class intrusion detection. Binned and rank-1
+feature encodings are streamed into $K$ fixed groups, rescaled by power-of-two
+factors and refined by a shared residual MLP. The forward pass therefore avoids
+an $N\times d$ token matrix and limits the group state to $K\times d$, independent
+of feature count. This structure provides the central deployment advantage:
+small activation memory without reducing every feature to a single scalar.
+
+Under the same leakage-controlled, class-stratified chronological protocol,
+the deployed $d=8$, $K=8$ model achieves macro-F1 scores of 0.8007, 0.5638 and
+0.6163 on Edge-IIoTset, CIC-IIoT-2025 and CICIDS2017, respectively. Its
+corresponding ESP32-S3 latencies are \SI{243.5}{\micro\second},
+\SI{250.6}{\micro\second} and \SI{277.4}{\micro\second}. On Edge-IIoTset it is
+$2.4\times$ faster and 7.4 macro-F1 percentage points better than the identically
+deployed $h=64$ MLP, while consuming \SI{9.56}{\micro\joule} per inference at
+\SI{240}{\mega\hertz}. Across the evaluated configurations, ATOM extends the
+accuracy--latency frontier above the lowest-latency $h=16$ MLP point; it does
+not displace that point. The tested FT-Transformer remains outside the target
+arithmetic and activation-memory budgets.
+
+These results also define the method's limits. The gather-and-accumulate kernel
+is less efficient per multiply-accumulate than dense matrix multiplication on
+the Xtensa LX7, and binned embeddings exchange compute for read-only storage.
+Moreover, the CIC-IIoT-2025 build flags \SI{65.1}{\percent} of benign windows,
+so its favourable relative cost does not establish readiness for unattended
+deployment on that corpus. The reported conclusions are confined to the three
+datasets, the class-stratified chronological protocol and the measured
+ESP32-S3 implementation.
+
+Future work should implement a pure-integer accumulation kernel, evaluate Arm
+Cortex-M targets, calibrate operating thresholds for lower false-alarm burden
+and test open-set generalisation against previously unseen attack campaigns.
+
+%% Journal back matter: contributions, declarations, availability, references
+%% and author biographies.
+
+\section*{CRediT authorship contribution statement}
+
+\textbf{Ashish Kalra:} Conceptualization, Methodology, Software, Validation,
+Formal analysis, Investigation, Data curation, Writing -- original draft,
+Visualization. \textbf{Manoj Kumar:} Conceptualization, Methodology,
+Supervision, Writing -- review \& editing, Project administration.
+
+\section*{Declaration of competing interest}
+
+The authors declare that they have no known competing financial interests or
+personal relationships that could have appeared to influence the work reported
+in this paper.
+
+\section*{Acknowledgements}
+
+The authors thank the Department of Computer Science \& Engineering, Delhi
+Technological University, for the computational resources that supported this
+work.
+
+\section*{Funding}
+
+This research did not receive any specific grant from funding agencies in the
+public, commercial or not-for-profit sectors.
+
+\section*{Data availability}
+
+The datasets analysed in this study are publicly available. Edge-IIoTset is
+available at
+\url{https://ieee-dataport.org/documents/edge-iiotset-new-comprehensive-realistic-cyber-security-dataset-iot-and-iiot-applications},
+CIC IIoT 2025 (DataSense) at
+\url{https://www.unb.ca/cic/datasets/iiot-dataset-2025.html}, and
+CICIDS2017 at \url{https://www.unb.ca/cic/datasets/ids-2017.html}. The
+preprocessing, training and device-export code supporting the findings of this
+study is available from the corresponding author on reasonable request.
+
+\bibliographystyle{IEEEtran}
+\bibliography{refs}
+
+\clearpage
+\section*{Authors}
+
+\noindent
+\begin{minipage}[t]{0.25\columnwidth}
+\vspace{0pt}\includegraphics[width=\linewidth]{figs/ashish_kalra.jpeg}
+\end{minipage}\hfill
+\begin{minipage}[t]{0.71\columnwidth}
+\vspace{0pt}\textbf{Ashish Kalra} is a software engineer and a part-time PhD
+research scholar in the Department of Computer Science \& Engineering at Delhi
+Technological University. He received his MTech from Delhi Technological
+University and his BTech from Punjab Technical University. His research
+interests include security in Internet of Things (IoT) environments and
+emerging machine-learning technologies. Alongside his research, he has
+substantial industry experience and has held several managerial positions.
+He is the corresponding author. Email:
+\nolinkurl{ashishkalra_2k22phdco502@dtu.ac.in}.
+\end{minipage}
+
+\newpage
+\noindent
+\begin{minipage}[t]{0.25\columnwidth}
+\vspace{0pt}\includegraphics[width=\linewidth]{figs/manoj_kumar.png}
+\end{minipage}\hfill
+\begin{minipage}[t]{0.71\columnwidth}
+\vspace{0pt}\textbf{Manoj Kumar} is a professor in the Department of Computer
+Science \& Engineering at Delhi Technological University. He received his
+MTech from IIT Delhi and his PhD from Delhi Technological University. His
+research interests include information security and natural language
+processing, and his current project concerns automated article writing. He has
+extensive experience in planning, budgeting and resource deployment for the
+efficient accomplishment of operational goals, as well as in teaching,
+training students and supervising projects. Email:
+\texttt{mkumarg@dce.ac.in}.
+\end{minipage}
+
+\end{document}
